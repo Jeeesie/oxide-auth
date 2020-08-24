@@ -33,3 +33,4 @@ pub mod error;
 pub mod extensions;
 pub mod refresh;
 pub mod resource;
+pub mod registration;

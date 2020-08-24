@@ -12,7 +12,7 @@ use primitives::issuer::Issuer;
 use primitives::registrar::Registrar;
 use primitives::scope::Scope;
 
-use endpoint::{AccessTokenFlow, AuthorizationFlow, ResourceFlow, RefreshFlow};
+use endpoint::{AccessTokenFlow, AuthorizationFlow, ResourceFlow, RefreshFlow, RegistarSolicitor};
 use endpoint::{Endpoint, Extension, OAuthError, PreGrant, Template, Scopes};
 use endpoint::{OwnerConsent, OwnerSolicitor};
 use endpoint::WebRequest;
@@ -108,6 +108,9 @@ pub struct Generic<R, A, I, S = Vacant, C = Vacant, L = Vacant> {
     /// A solicitor implementation fit for the request types, or `Vacant` if it is not necesary.
     pub solicitor: S,
 
+  /*  /// for registar, A solicitor implementation fit for the request types, or `Vacant` if it is not necesary.
+    pub registar_solicitor: RS,*/
+
     /// Determine scopes for the request types, or `Vacant` if this does not protect resources.
     pub scopes: C,
 
@@ -194,6 +197,8 @@ pub struct ApprovedGrant {
 pub trait OptRegistrar {
     /// Reference this as a `Registrar` or `Option::None`.
     fn opt_ref(&self) -> Option<&dyn Registrar>;
+
+    fn opt_mut(&mut self) -> Option<&mut dyn Registrar>;
 }
 
 /// Like `AsMut<Authorizer +'_>` but in a way that is expressible.
@@ -285,6 +290,7 @@ where
         authorizer,
         issuer: Vacant,
         solicitor,
+        // registar_solicitor: Vacant,
         scopes: Vacant,
         response: Vacant,
     });
@@ -315,6 +321,7 @@ where
         authorizer,
         issuer,
         solicitor: Vacant,
+        // registar_solicitor: Vacant,
         scopes: Vacant,
         response: Vacant,
     });
@@ -345,6 +352,7 @@ where
         authorizer: Vacant,
         issuer,
         solicitor: Vacant,
+        // registar_solicitor: Vacant,
         scopes,
         response: Vacant,
     });
@@ -375,6 +383,7 @@ where
         authorizer: Vacant,
         issuer,
         solicitor: Vacant,
+        // registar_solicitor: Vacant,
         scopes: Vacant,
         response: Vacant,
     });
@@ -393,10 +402,23 @@ impl<R, A, I, O, C, L> Generic<R, A, I, O, C, L> {
             authorizer: self.authorizer,
             issuer: self.issuer,
             solicitor: new_solicitor,
+            // registar_solicitor: Vacant,
             scopes: self.scopes,
             response: self.response,
         }
     }
+/*    /// Change the used solicitor.
+    pub fn with_regist_solicitor<N>(self, new_solicitor: RS) -> Generic<R, A, I, N, C, L> {
+        Generic {
+            registrar: self.registrar,
+            authorizer: self.authorizer,
+            issuer: self.issuer,
+            solicitor: Vacant,
+            // registar_solicitor: new_solicitor,
+            scopes: self.scopes,
+            response: self.response,
+        }
+    }*/
 
     /// Change the used scopes.
     pub fn with_scopes<S>(self, new_scopes: S) -> Generic<R, A, I, O, S, L> {
@@ -405,6 +427,7 @@ impl<R, A, I, O, C, L> Generic<R, A, I, O, C, L> {
             authorizer: self.authorizer,
             issuer: self.issuer,
             solicitor: self.solicitor,
+            // registar_solicitor: Vacant,
             scopes: new_scopes,
             response: self.response,
         }
@@ -515,6 +538,14 @@ where
         self.0.registrar()
     }
 
+    fn registrar_mut(&mut self) -> Option<&mut dyn Registrar> {
+        self.0.registrar_mut()
+    }
+
+/*    fn registar_solicitor(&mut self) -> Option<&mut dyn RegistarSolicitor<W>> {
+        self.0.registar_solicitor()
+    }*/
+
     fn authorizer_mut(&mut self) -> Option<&mut dyn Authorizer> {
         self.0.authorizer_mut()
     }
@@ -554,7 +585,8 @@ where
     R: OptRegistrar,
     A: OptAuthorizer,
     I: OptIssuer,
-    O: OwnerSolicitor<W>,
+    O: OwnerSolicitor<W> ,
+    // R: RegistarSolicitor<W>,
     C: Scopes<W>,
     L: ResponseCreator<W>,
 {
@@ -564,6 +596,12 @@ where
         self.registrar.opt_ref()
     }
 
+    fn registrar_mut(&mut self) -> Option<&mut dyn Registrar> {self.registrar.opt_mut()}
+/*
+    fn registar_solicitor(&mut self) -> Option<&mut dyn RegistarSolicitor<W>> {
+        Some(&mut self.solicitor)
+    }
+*/
     fn authorizer_mut(&mut self) -> Option<&mut dyn Authorizer> {
         self.authorizer.opt_mut()
     }
@@ -597,6 +635,10 @@ impl<T: Registrar> OptRegistrar for T {
     fn opt_ref(&self) -> Option<&dyn Registrar> {
         Some(self)
     }
+
+    fn opt_mut(&mut self) -> Option<&mut dyn Registrar> {
+        Some(self)
+    }
 }
 
 impl<T: Authorizer> OptAuthorizer for T {
@@ -613,6 +655,10 @@ impl<T: Issuer> OptIssuer for T {
 
 impl OptRegistrar for Vacant {
     fn opt_ref(&self) -> Option<&dyn Registrar> {
+        Option::None
+    }
+
+    fn opt_mut(&mut self) -> Option<&mut dyn Registrar> {
         Option::None
     }
 }
@@ -635,6 +681,12 @@ impl<W: WebRequest> OwnerSolicitor<W> for Vacant {
     }
 }
 
+impl<W: WebRequest> RegistarSolicitor<W> for Vacant {
+    fn check_client(&mut self) -> OwnerConsent<W::Response> {
+        OwnerConsent::Denied
+    }
+}
+
 impl<W: WebRequest> Scopes<W> for Vacant {
     fn scopes(&mut self, _: &mut W) -> &[Scope] {
         const NO_SCOPES: [Scope; 0] = [];
@@ -652,6 +704,17 @@ where
     }
 }
 
+impl<W, F> RegistarSolicitor<W> for FnSolicitor<F>
+where
+    W: WebRequest,
+    F: FnMut() -> OwnerConsent<W::Response>
+{
+    fn check_client(&mut self) -> OwnerConsent<W::Response>{
+        (self.0)()
+    }
+}
+
+
 impl<W: WebRequest> OwnerSolicitor<W> for ApprovedGrant {
     /// Approve if the grant matches *exactly*.
     ///
@@ -666,6 +729,7 @@ impl<W: WebRequest> OwnerSolicitor<W> for ApprovedGrant {
         }
     }
 }
+
 
 impl<W: WebRequest> ResponseCreator<W> for Vacant
 where

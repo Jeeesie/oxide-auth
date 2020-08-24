@@ -2,7 +2,7 @@
 use async_trait::async_trait;
 use oxide_auth::primitives::{authorizer, issuer, registrar, grant::Grant, scope::Scope};
 use oxide_auth::primitives::issuer::{IssuedToken, RefreshedToken};
-use oxide_auth::primitives::registrar::{ClientUrl, BoundClient, RegistrarError, PreGrant};
+use oxide_auth::primitives::registrar::{Client, ClientUrl, BoundClient, RegistrarError, PreGrant};
 
 #[async_trait(?Send)]
 pub trait Authorizer {
@@ -67,8 +67,10 @@ pub trait Registrar {
     ) -> Result<PreGrant, RegistrarError>;
 
     async fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError>;
-}
 
+    async fn regist(&mut self, client: Client) -> Result<String, RegistrarError>;
+}
+/*
 #[async_trait(?Send)]
 impl<T> Registrar for T
 where
@@ -87,4 +89,9 @@ where
     async fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError> {
         registrar::Registrar::check(self, client_id, passphrase)
     }
-}
+
+    async fn regist(&mut self, client: Client) -> Result<String, RegistrarError>{
+        registrar::Registrar::regist(self, client)
+    }
+}*/
+

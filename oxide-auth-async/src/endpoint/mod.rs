@@ -10,6 +10,7 @@ pub mod authorization;
 pub mod access_token;
 pub mod refresh;
 pub mod resource;
+pub mod registration;
 
 pub trait Endpoint<Request: WebRequest> {
     /// The error typed used as the error representation of each flow.

@@ -17,6 +17,7 @@ use argon2::{self, Config};
 use once_cell::sync::Lazy;
 use rand::{RngCore, thread_rng};
 use url::Url;
+use std::ops::Deref;
 
 /// Registrars provie a way to interact with clients.
 ///
@@ -43,6 +44,8 @@ pub trait Registrar {
 
     /// Try to login as client with some authentication.
     fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError>;
+
+    fn regist(&mut self, client: Client) -> Result<String, RegistrarError>;
 }
 
 /// A pair of `client_id` and an optional `redirect_uri`.
@@ -119,7 +122,7 @@ pub enum RegistrarError {
 // TODO: there is no more an apparent reason for this to be a strictly owning struct.
 #[derive(Clone, Debug)]
 pub struct Client {
-    client_id: String,
+    pub client_id: String,
     redirect_uri: Url,
     additional_redirect_uris: Vec<Url>,
     default_scope: Scope,
@@ -334,9 +337,16 @@ impl ClientMap {
 
     /// Insert or update the client record.
     pub fn register_client(&mut self, client: Client) {
+        println!("client map registering....");
         let password_policy = Self::current_policy(&self.password_policy);
         self.clients
             .insert(client.client_id.clone(), client.encode(password_policy));
+    }
+
+    /// Insert or update the client record.
+    pub fn register_encoded_client(&mut self, encoded_client: EncodedClient) {
+        println!("client map registering encoded_client....");
+        self.clients.insert(encoded_client.client_id.clone(), encoded_client);
     }
 
     /// Change how passwords are encoded while stored.
@@ -385,6 +395,12 @@ impl<'s, R: Registrar + ?Sized> Registrar for &'s R {
     fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError> {
         (**self).check(client_id, passphrase)
     }
+
+    fn regist(&mut self,client: Client) -> Result<String, RegistrarError>{
+        println!("here. line 388.");
+        // (**self).regist(client)
+        self.regist(client)
+    }
 }
 
 impl<'s, R: Registrar + ?Sized> Registrar for &'s mut R {
@@ -398,6 +414,11 @@ impl<'s, R: Registrar + ?Sized> Registrar for &'s mut R {
 
     fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError> {
         (**self).check(client_id, passphrase)
+    }
+
+    fn regist(&mut self, client: Client) -> Result<String, RegistrarError>{
+        println!("here. line 409.");
+        (**self).regist(client)
     }
 }
 
@@ -413,6 +434,10 @@ impl<R: Registrar + ?Sized> Registrar for Box<R> {
     fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError> {
         (**self).check(client_id, passphrase)
     }
+
+    fn regist(&mut self,client: Client) -> Result<String, RegistrarError>{
+        (**self).regist(client)
+    }
 }
 
 impl<R: Registrar + ?Sized> Registrar for Rc<R> {
@@ -426,6 +451,11 @@ impl<R: Registrar + ?Sized> Registrar for Rc<R> {
 
     fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError> {
         (**self).check(client_id, passphrase)
+    }
+
+    fn regist(&mut self,client: Client) -> Result<String, RegistrarError>{
+        // (**self).regist(client)
+        unimplemented!()
     }
 }
 
@@ -441,6 +471,11 @@ impl<R: Registrar + ?Sized> Registrar for Arc<R> {
     fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError> {
         (**self).check(client_id, passphrase)
     }
+
+    fn regist(&mut self,client: Client) -> Result<String, RegistrarError>{
+        // (**self).regist(client)
+        unimplemented!()
+    }
 }
 
 impl<'s, R: Registrar + ?Sized + 's> Registrar for MutexGuard<'s, R> {
@@ -455,6 +490,10 @@ impl<'s, R: Registrar + ?Sized + 's> Registrar for MutexGuard<'s, R> {
     fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError> {
         (**self).check(client_id, passphrase)
     }
+
+    fn regist(&mut self,client: Client) -> Result<String, RegistrarError>{
+        (**self).regist(client)
+    }
 }
 
 impl<'s, R: Registrar + ?Sized + 's> Registrar for RwLockWriteGuard<'s, R> {
@@ -468,6 +507,10 @@ impl<'s, R: Registrar + ?Sized + 's> Registrar for RwLockWriteGuard<'s, R> {
 
     fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError> {
         (**self).check(client_id, passphrase)
+    }
+
+    fn regist(&mut self,client: Client) -> Result<String, RegistrarError>{
+        (**self).regist(client)
     }
 }
 
@@ -522,6 +565,23 @@ impl Registrar for ClientMap {
             })?;
 
         Ok(())
+    }
+
+
+    fn regist(&mut self, client: Client) -> Result<String, RegistrarError>{
+        println!(" in impl registar for ClientMap regist .");
+
+        let password_policy = Self::current_policy(&self.password_policy);
+        let encoded_client = client.encode(password_policy);
+
+        let client_id = encoded_client.client_id.clone();
+
+        if self.clients.contains_key(&client_id){
+            return Result::Err(RegistrarError::PrimitiveError);
+        }
+        self.clients.insert(client_id.clone(), encoded_client);
+        // self.register_client(client);
+        Ok(client_id)
     }
 }
 

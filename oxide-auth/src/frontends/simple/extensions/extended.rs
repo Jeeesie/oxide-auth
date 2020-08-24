@@ -1,4 +1,4 @@
-use endpoint::{Endpoint, Extension, OAuthError, OwnerSolicitor, Scopes, Template, WebRequest};
+use endpoint::{Endpoint, Extension, OAuthError, OwnerSolicitor, Scopes, Template, WebRequest, RegistarSolicitor};
 use primitives::authorizer::Authorizer;
 use primitives::issuer::Issuer;
 use primitives::registrar::Registrar;
@@ -57,6 +57,14 @@ where
         self.inner.registrar()
     }
 
+    fn registrar_mut(&mut self) -> Option<&mut dyn Registrar> {
+        self.inner.registrar_mut()
+    }
+
+/*    fn registar_solicitor(&mut self) -> Option<&mut dyn RegistarSolicitor<Request>> {
+        self.inner.registar_solicitor()
+    }
+*/
     fn authorizer_mut(&mut self) -> Option<&mut dyn Authorizer> {
         self.inner.authorizer_mut()
     }

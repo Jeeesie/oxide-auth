@@ -5,6 +5,7 @@ use code_grant::authorization::{
 
 use super::*;
 
+
 /// All relevant methods for handling authorization code requests.
 pub struct AuthorizationFlow<E, R>
 where

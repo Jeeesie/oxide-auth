@@ -34,16 +34,18 @@ mod error;
 mod refresh;
 mod resource;
 mod query;
+// mod registration;
 
 #[cfg(test)]
 mod tests;
 
 use std::borrow::Cow;
 use std::marker::PhantomData;
+use primitives::registrar::Client;
 
 pub use primitives::authorizer::Authorizer;
 pub use primitives::issuer::Issuer;
-pub use primitives::registrar::Registrar;
+// pub use primitives::registrar::Registrar;
 pub use primitives::scope::Scope;
 
 use code_grant::resource::{Error as ResourceError};
@@ -62,6 +64,11 @@ pub use self::error::OAuthError;
 pub use self::refresh::RefreshFlow;
 pub use self::resource::*;
 pub use self::query::*;
+// add by lj
+// pub use self::registration::RegisterFlow;
+
+
+
 
 /// Answer from OwnerAuthorizer to indicate the owners choice.
 pub enum OwnerConsent<Response: WebResponse> {
@@ -76,6 +83,9 @@ pub enum OwnerConsent<Response: WebResponse> {
 
     /// An error occurred while checking authorization.
     Error(Response::Error),
+
+/*    /// manager want to regist a new client to the server.
+    Regist(Client)*/
 }
 
 /// Modifiable reason for creating a response to the client.
@@ -118,7 +128,7 @@ pub enum ResponseStatus {
 /// not derive this until this has shown unlikely but strongly requested. Please open an issue if you
 /// think the pros or cons should be evaluated differently.
 #[derive(Debug)]
-enum InnerTemplate<'a> {
+pub enum InnerTemplate<'a> {
     /// Authorization to access the resource has not been granted.
     Unauthorized {
         /// The underlying cause for denying access.
@@ -177,6 +187,10 @@ pub trait OwnerSolicitor<Request: WebRequest> {
     /// Ensure that a user (resource owner) is currently authenticated (for example via a session
     /// cookie) and determine if he has agreed to the presented grants.
     fn check_consent(&mut self, &mut Request, pre_grant: &PreGrant) -> OwnerConsent<Request::Response>;
+}
+
+pub trait RegistarSolicitor<Request: WebRequest>{
+    fn check_client(&mut self) -> OwnerConsent<Request::Response>;
 }
 
 /// Determine the scopes applying to a request of a resource.
@@ -322,6 +336,8 @@ pub trait Endpoint<Request: WebRequest> {
     /// have any effect on flows that do not require one.
     fn registrar(&self) -> Option<&dyn Registrar>;
 
+    fn registrar_mut(&mut self) -> Option<&mut dyn Registrar>;
+
     /// An authorizer if this endpoint can access one.
     ///
     /// Returning `None` will implicate failing any flow that requires an authorizer but does not
@@ -339,6 +355,8 @@ pub trait Endpoint<Request: WebRequest> {
     /// Returning `None` will implicated failing the authorization code flow but does have any
     /// effect on other flows.
     fn owner_solicitor(&mut self) -> Option<&mut dyn OwnerSolicitor<Request>>;
+
+    // fn registar_solicitor(&mut self) -> Option<&mut dyn RegistarSolicitor<Request>>;
 
     /// Determine the required scopes for a request.
     ///
@@ -494,6 +512,14 @@ impl<'a, R: WebRequest, E: Endpoint<R>> Endpoint<R> for &'a mut E {
         (**self).registrar()
     }
 
+    fn registrar_mut(&mut self) -> Option<&mut dyn Registrar> {
+        (**self).registrar_mut()
+    }
+
+/*    fn registar_solicitor(&mut self) -> Option<&mut dyn RegistarSolicitor<R>> {
+        (**self).registar_solicitor()
+    }*/
+
     fn authorizer_mut(&mut self) -> Option<&mut dyn Authorizer> {
         (**self).authorizer_mut()
     }
@@ -505,6 +531,7 @@ impl<'a, R: WebRequest, E: Endpoint<R>> Endpoint<R> for &'a mut E {
     fn owner_solicitor(&mut self) -> Option<&mut dyn OwnerSolicitor<R>> {
         (**self).owner_solicitor()
     }
+
 
     fn scopes(&mut self) -> Option<&mut dyn Scopes<R>> {
         (**self).scopes()
@@ -533,6 +560,14 @@ impl<'a, R: WebRequest, E: Endpoint<R> + 'a> Endpoint<R> for Box<E> {
     fn registrar(&self) -> Option<&dyn Registrar> {
         (**self).registrar()
     }
+
+    fn registrar_mut(&mut self) -> Option<&mut dyn Registrar> {
+        (**self).registrar_mut()
+    }
+
+/*    fn registar_solicitor(&mut self) -> Option<&mut dyn RegistarSolicitor<R>> {
+        (**self).registar_solicitor()
+    }*/
 
     fn authorizer_mut(&mut self) -> Option<&mut dyn Authorizer> {
         (**self).authorizer_mut()
@@ -580,6 +615,19 @@ impl<'a, W: WebRequest, S: OwnerSolicitor<W> + 'a + ?Sized> OwnerSolicitor<W> fo
         (**self).check_consent(request, pre)
     }
 }
+
+
+impl<'a, W: WebRequest, S: RegistarSolicitor<W> + 'a + ?Sized> RegistarSolicitor<W> for &'a mut S {
+    fn check_client(&mut self) -> OwnerConsent<W::Response> {
+        (**self).check_client()
+    }
+}
+impl<'a, W: WebRequest, S: RegistarSolicitor<W> + 'a + ?Sized> RegistarSolicitor<W> for Box<S> {
+    fn check_client(&mut self) -> OwnerConsent<W::Response> {
+        (**self).check_client()
+    }
+}
+
 
 impl<W: WebRequest> Scopes<W> for [Scope] {
     fn scopes(&mut self, _: &mut W) -> &[Scope] {

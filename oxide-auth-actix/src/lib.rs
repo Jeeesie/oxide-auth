@@ -25,7 +25,7 @@ use url::Url;
 
 mod operations;
 
-pub use operations::{Authorize, Refresh, Resource, Token};
+pub use operations::{Authorize, Refresh, Resource, Token, ClientRegistar};
 
 /// Describes an operation that can be performed in the presence of an `Endpoint`
 ///
@@ -122,7 +122,7 @@ pub struct OAuthRequest {
 /// This is useful over [OAuthRequest] since [OAuthResource] doesn't consume the body of the
 /// request upon extraction
 pub struct OAuthResource {
-    auth: Option<String>,
+    pub auth: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -462,3 +462,4 @@ impl error::Error for WebError {
 impl ResponseError for WebError {
     // Default to 500 for now
 }
+
