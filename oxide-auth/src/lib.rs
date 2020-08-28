@@ -65,6 +65,13 @@
 //! [`Scopes`]: endpoint/trait.Scopes.html
 #![warn(missing_docs)]
 
+pub mod endpoint;
+pub mod code_grant;
+pub mod frontends;
+pub mod primitives;
+
+pub mod oauth_client_detail;
+
 extern crate argon2;
 extern crate base64;
 extern crate chrono;
@@ -76,11 +83,15 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
+#[macro_use]
+extern crate lazy_static;
+#[macro_use]
+extern crate log;
 extern crate sha2;
 extern crate subtle;
 extern crate url;
+extern crate r2d2_redis;
+extern crate r2d2;
+extern crate reqwest;
+extern crate dotenv;
 
-pub mod code_grant;
-pub mod endpoint;
-pub mod frontends;
-pub mod primitives;

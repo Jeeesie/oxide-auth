@@ -116,6 +116,7 @@ where
     /// When the registrar, authorizer, or issuer returned by the endpoint is suddenly
     /// `None` when previously it was `Some(_)`.
     pub fn execute(&mut self, mut request: R) -> Result<R::Response, E::Error> {
+        debug!("in access token execute.");
         let issued = access_token(
             &mut self.endpoint,
             &WrappedRequest::new(&mut request, self.allow_credentials_in_body),
@@ -215,7 +216,8 @@ impl<'a, R: WebRequest + 'a> WrappedRequest<'a, R> {
 
         Ok(WrappedRequest {
             request: PhantomData,
-            body: request.urlbody().map_err(FailParse::Err)?,
+            // body: request.urlbody().map_err(FailParse::Err)?,
+            body: request.query().map_err(FailParse::Err)?,  //改为query接受参数
             authorization,
             error: None,
             allow_credentials_in_body: credentials,

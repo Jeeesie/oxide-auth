@@ -11,6 +11,8 @@ use primitives::authorizer::Authorizer;
 use primitives::issuer::{IssuedToken, Issuer};
 use primitives::grant::{Extensions, Grant};
 use primitives::registrar::{Registrar, RegistrarError};
+use url::Url;
+
 
 /// Token Response
 #[derive(Deserialize, Serialize)]
@@ -272,7 +274,9 @@ impl AccessToken {
     /// Go to next state
     pub fn advance(&mut self, input: Input) -> Output<'_> {
         self.state = match (self.take(), input) {
-            (current, Input::None) => current,
+            (current, Input::None) => {
+                debug!("input none.");
+                current},
             (
                 AccessTokenState::Authenticate {
                     client,
@@ -281,21 +285,35 @@ impl AccessToken {
                     ..
                 },
                 Input::Authenticated,
-            ) => Self::authencicated(client, code, redirect_uri),
+            ) => {
+                debug!("input Authenticated.");
+                Self::authencicated(client, code, redirect_uri)
+            },
             (
                 AccessTokenState::Recover {
                     client, redirect_uri, ..
                 },
                 Input::Recovered(grant),
-            ) => Self::recovered(client, redirect_uri, grant).unwrap_or_else(AccessTokenState::Err),
+            ) => {
+                debug!("input Recovered.");
+                Self::recovered(client, redirect_uri, grant).unwrap_or_else(AccessTokenState::Err)
+            },
             (AccessTokenState::Extend { saved_params, .. }, Input::Extended { access_extensions }) => {
+                debug!("input Extended.");
                 Self::issue(saved_params, access_extensions)
             }
             (AccessTokenState::Issue { grant }, Input::Issued(token)) => {
+                debug!("input Issued.");
                 return Output::Ok(Self::finish(grant, token));
             }
-            (AccessTokenState::Err(err), _) => AccessTokenState::Err(err),
-            (_, _) => AccessTokenState::Err(Error::Primitive(PrimitiveError::empty())),
+            (AccessTokenState::Err(err), _) => {
+                debug!("input Err.");
+                AccessTokenState::Err(err)
+            },
+            (_, _) => {
+                debug!("_ Err.");
+                AccessTokenState::Err(Error::Primitive(PrimitiveError::empty()))
+            },
         };
 
         self.output()
@@ -328,6 +346,8 @@ impl AccessToken {
     }
 
     fn validate(request: &dyn Request) -> Result<AccessTokenState> {
+
+        debug!("in validate .");
         if !request.valid() {
             return Err(Error::invalid());
         }
@@ -335,6 +355,8 @@ impl AccessToken {
         let authorization = request.authorization();
         let client_id = request.client_id();
         let client_secret = request.extension("client_secret");
+
+        debug!("client authorization {:?}", authorization.clone().unwrap());
 
         let mut credentials = Credentials::None;
         if let Some((client_id, auth)) = &authorization {
@@ -350,6 +372,7 @@ impl AccessToken {
                 Some(_) | None => credentials.unauthenticated(client_id.as_ref()),
             }
         }
+        debug!("grant_type {:?}", request.grant_type().as_ref());
 
         match request.grant_type() {
             Some(ref cow) if cow == "authorization_code" => (),
@@ -359,14 +382,18 @@ impl AccessToken {
 
         let (client_id, passdata) = credentials.into_client().ok_or_else(Error::invalid)?;
 
-        let redirect_uri = request
+        debug!("client_id {:?}", &client_id);
+
+        let redirect_uri: Url = request
             .redirect_uri()
             .ok_or_else(Error::invalid)?
             .parse()
             .map_err(|_| Error::invalid())?;
 
-        let code = request.code().ok_or_else(Error::invalid)?;
+        debug!("redirect_uri {:?}", redirect_uri.clone().as_str());
 
+        let code = request.code().ok_or_else(Error::invalid)?;
+        debug!("validate ok.");
         Ok(AccessTokenState::Authenticate {
             client: client_id.to_string(),
             passdata: passdata.map(Vec::from),
@@ -443,6 +470,7 @@ pub fn access_token(handler: &mut dyn Endpoint, request: &dyn Request) -> Result
         let input = match requested {
             Requested::None => Input::None,
             Requested::Authenticate { client, passdata } => {
+                debug!("begin to check registrar");
                 handler
                     .registrar()
                     .check(client, passdata)

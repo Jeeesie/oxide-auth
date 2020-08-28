@@ -34,10 +34,9 @@ mod error;
 mod refresh;
 mod resource;
 mod query;
-// mod registration;
 
-#[cfg(test)]
-mod tests;
+// #[cfg(test)]
+// mod tests;
 
 use std::borrow::Cow;
 use std::marker::PhantomData;
@@ -45,7 +44,7 @@ use primitives::registrar::Client;
 
 pub use primitives::authorizer::Authorizer;
 pub use primitives::issuer::Issuer;
-// pub use primitives::registrar::Registrar;
+pub use primitives::registrar::Registrar;
 pub use primitives::scope::Scope;
 
 use code_grant::resource::{Error as ResourceError};

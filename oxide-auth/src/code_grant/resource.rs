@@ -7,6 +7,7 @@ use chrono::Utc;
 use primitives::issuer::Issuer;
 use primitives::grant::Grant;
 use primitives::scope::Scope;
+use endpoint::Scopes;
 
 /// Gives additional information about the reason for an access failure.
 ///
@@ -277,6 +278,7 @@ fn validate<'req>(request: &'req dyn Request) -> Result<ResourceState> {
         Cow::Owned(mut token) => token.split_off(BEARER_START.len()),
     };
 
+    debug!("Internalized ok. token: {:?}", token);
     Ok(ResourceState::Internalized { token })
 }
 
@@ -288,6 +290,11 @@ fn get_scopes<'req>(token: String, scopes: &'req [Scope]) -> ResourceState {
 }
 
 fn recovered<'req>(grant: Option<Grant>, mut scopes: Vec<Scope>) -> Result<Grant> {
+    debug!("{:?}", grant);
+    for scope in &scopes{
+        debug!("scope: {:?}", scope.tokens);
+    }
+
     let grant = match grant {
         Some(grant) => grant,
         None => {

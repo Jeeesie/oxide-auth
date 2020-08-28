@@ -19,7 +19,7 @@ futures = "0.3"
 oxide-auth = { version = "0.5.0-preview.0", path = "../oxide-auth" }
 serde_urlencoded = "0.5.1"
 url = "1.7"
-oxide-auth-async={path="../oxide-auth-async", version = "0.1.0-alpha"}
+#oxide-auth-async={path="../oxide-auth-async", version = "0.1.0-alpha"}
 smol = "0.1.18"
 
 

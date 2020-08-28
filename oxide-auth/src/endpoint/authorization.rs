@@ -134,19 +134,24 @@ where
     /// When the registrar or the authorizer returned by the endpoint is suddenly `None` when
     /// previously it was `Some(_)`.
     pub fn execute(&mut self, mut request: R) -> Result<R::Response, E::Error> {
+        debug!("in excecute...");
         let negotiated = authorization_code(&mut self.endpoint, &WrappedRequest::new(&mut request));
-
+        debug!("after negotiated...");
         let inner = match negotiated {
             Err(err) => match authorization_error(&mut self.endpoint.inner, &mut request, err) {
                 Ok(response) => AuthorizationPartialInner::Failed { request, response },
                 Err(error) => AuthorizationPartialInner::Error { request, error },
             },
-            Ok(negotiated) => AuthorizationPartialInner::Pending {
-                pending: AuthorizationPending {
-                    endpoint: &mut self.endpoint,
-                    pending: negotiated,
-                    request,
-                },
+            Ok(negotiated) => {
+                debug!("after Pending...");
+                AuthorizationPartialInner::Pending {
+
+                    pending: AuthorizationPending {
+                        endpoint: &mut self.endpoint,
+                        pending: negotiated,
+                        request,
+                    },
+                }
             },
         };
 

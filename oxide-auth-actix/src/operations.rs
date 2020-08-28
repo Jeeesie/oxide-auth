@@ -4,7 +4,7 @@ use oxide_auth::{
     primitives::grant::Grant,
 };
 use oxide_auth::primitives::registrar::Client;
-use oxide_auth_async::endpoint::registration::RegisterFlow;
+// use oxide_auth_async::endpoint::registration::RegisterFlow;
 
 /// Authorization-related operations
 pub struct Authorize(pub OAuthRequest);
@@ -18,6 +18,7 @@ impl OAuthOperation for Authorize {
         E: Endpoint<OAuthRequest>,
         WebError: From<E::Error>,
     {
+        println!("in Authorize oauthoperation run ..");
         AuthorizationFlow::prepare(endpoint)?
             .execute(self.0)
             .map_err(WebError::from)
@@ -79,7 +80,7 @@ impl OAuthOperation for Resource {
     }
 }
 
-/// Client related operations
+/*/// Client related operations
 pub struct ClientRegistar(pub OAuthRequest);
 
 impl OAuthOperation for ClientRegistar {
@@ -106,4 +107,4 @@ impl OAuthOperation for ClientRegistar {
         let tmp1 = smol::run(tmp.execute(r));
         tmp1.map_err(WebError::from)
     }
-}
+}*/

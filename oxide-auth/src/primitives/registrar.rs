@@ -1,8 +1,7 @@
-//! Registrars administer a database of known clients.
-//!
-//! It will govern their redirect urls and allowed scopes to request tokens for. When an oauth
-//! request turns up, it is the registrars duty to verify the requested scope and redirect url for
-//! consistency in the permissions granted and urls registered.
+use url::quirks::password;
+use std::borrow::Borrow;
+use std::str::FromStr;
+use reqwest::Url;
 use super::scope::Scope;
 
 use std::borrow::Cow;
@@ -16,37 +15,11 @@ use std::sync::{Arc, MutexGuard, RwLockWriteGuard};
 use argon2::{self, Config};
 use once_cell::sync::Lazy;
 use rand::{RngCore, thread_rng};
-use url::Url;
 use std::ops::Deref;
+use primitives::redis::RedisDataSource;
+use oauth_client_detail::{OauthClientRedisRepository, Oauth2ClientDetail};
+use std::net::ToSocketAddrs;
 
-/// Registrars provie a way to interact with clients.
-///
-/// Most importantly, they determine defaulted parameters for a request as well as the validity
-/// of provided parameters. In general, implementations of this trait will probably offer an
-/// interface for registering new clients. This interface is not covered by this library.
-pub trait Registrar {
-    /// Determine the allowed scope and redirection url for the client. The registrar may override
-    /// the scope entirely or simply substitute a default scope in case none is given. Redirection
-    /// urls should be matched verbatim, not partially.
-    fn bound_redirect<'a>(&self, bound: ClientUrl<'a>) -> Result<BoundClient<'a>, RegistrarError>;
-
-    /// Finish the negotiations with the registrar.
-    ///
-    /// The registrar is responsible for choosing the appropriate scope for the client. In the most
-    /// simple case, it will always choose some default scope for the client, regardless of its
-    /// wish. The standard permits this but requires the client to be notified of the resulting
-    /// scope of the token in such a case, when it retrieves its token via the access token
-    /// request.
-    ///
-    /// Another common strategy is to set a default scope or return the intersection with another
-    /// scope.
-    fn negotiate(&self, client: BoundClient, scope: Option<Scope>) -> Result<PreGrant, RegistrarError>;
-
-    /// Try to login as client with some authentication.
-    fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError>;
-
-    fn regist(&mut self, client: Client) -> Result<String, RegistrarError>;
-}
 
 /// A pair of `client_id` and an optional `redirect_uri`.
 ///
@@ -283,6 +256,7 @@ impl cmp::PartialOrd<Self> for PreGrant {
 /// Determines how passphrases are stored and checked.
 ///
 /// The provided library implementation is based on `Argon2`.
+
 pub trait PasswordPolicy: Send + Sync {
     /// Transform the passphrase so it can be stored in the confidential client.
     fn store(&self, client_id: &str, passphrase: &[u8]) -> Vec<u8>;
@@ -323,30 +297,48 @@ impl PasswordPolicy for Argon2 {
     }
 }
 
+pub trait Registrar {
+    fn bound_redirect<'a>(&self, bound: ClientUrl<'a>) -> Result<BoundClient<'a>, RegistrarError>;
+
+    fn negotiate<'a>(
+        &self, client: BoundClient<'a>, scope: Option<Scope>,
+    ) -> Result<PreGrant, RegistrarError>;
+
+    fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError>;
+
+    fn regist(&mut self, client: Client) -> Result<String, RegistrarError>;
+}
+
+pub struct Oauth2ClientService{
+    pub db: RedisDataSource,
+    password_policy: Option<Box<dyn PasswordPolicy>>,
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //                             Standard Implementations of Registrars                            //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-static DEFAULT_PASSWORD_POLICY: Lazy<Argon2> = Lazy::new(|| Argon2::default());
+static DEFAULT_PASSWORD_POLICY: Lazy<Argon2> = Lazy::new(|| { Argon2::default() });
 
-impl ClientMap {
+impl Oauth2ClientService {
     /// Create an empty map without any clients in it.
-    pub fn new() -> ClientMap {
-        ClientMap::default()
+    pub fn new() -> Self {
+        Oauth2ClientService{
+            db: RedisDataSource::default(),
+            password_policy: None
+        }
     }
 
     /// Insert or update the client record.
-    pub fn register_client(&mut self, client: Client) {
-        println!("client map registering....");
+    pub fn register_client(&mut self, client: Client) -> Result<(), RegistrarError>  {
         let password_policy = Self::current_policy(&self.password_policy);
-        self.clients
-            .insert(client.client_id.clone(), client.encode(password_policy));
-    }
-
-    /// Insert or update the client record.
-    pub fn register_encoded_client(&mut self, encoded_client: EncodedClient) {
-        println!("client map registering encoded_client....");
-        self.clients.insert(encoded_client.client_id.clone(), encoded_client);
+        let encoded_client = client.encode(password_policy);
+   /*     match self.db.regist_client(encoded_client){
+            Ok(()) => Ok(()),
+            Err(e) => RegistrarError::Unspecified
+        }*/
+        self.db.regist_from_encoded_client(encoded_client)
+            .map_err(|e| RegistrarError::Unspecified)
     }
 
     /// Change how passwords are encoded while stored.
@@ -357,38 +349,35 @@ impl ClientMap {
     // This is not an instance method because it needs to borrow the box but register needs &mut
     fn current_policy<'a>(policy: &'a Option<Box<dyn PasswordPolicy>>) -> &'a dyn PasswordPolicy {
         policy
-            .as_ref()
-            .map(|boxed| &**boxed)
+            .as_ref().map(|boxed| &**boxed)
             .unwrap_or(&*DEFAULT_PASSWORD_POLICY)
     }
 }
 
-impl Extend<Client> for ClientMap {
-    fn extend<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = Client>,
-    {
-        iter.into_iter().for_each(|client| self.register_client(client))
+
+impl Extend<Client> for Oauth2ClientService {
+    fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item=Client> {
+        iter.into_iter().for_each(|client| {
+           self.register_client(client);
+        })
     }
 }
 
-impl FromIterator<Client> for ClientMap {
-    fn from_iter<I>(iter: I) -> Self
-    where
-        I: IntoIterator<Item = Client>,
-    {
-        let mut into = ClientMap::new();
+impl FromIterator<Client> for Oauth2ClientService {
+    fn from_iter<I>(iter: I) -> Self where I: IntoIterator<Item=Client> {
+        let mut into = Oauth2ClientService::new();
         into.extend(iter);
         into
     }
 }
+
 
 impl<'s, R: Registrar + ?Sized> Registrar for &'s R {
     fn bound_redirect<'a>(&self, bound: ClientUrl<'a>) -> Result<BoundClient<'a>, RegistrarError> {
         (**self).bound_redirect(bound)
     }
 
-    fn negotiate(&self, bound: BoundClient, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
+    fn negotiate<'a>(&self, bound: BoundClient<'a>, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
         (**self).negotiate(bound, scope)
     }
 
@@ -397,8 +386,6 @@ impl<'s, R: Registrar + ?Sized> Registrar for &'s R {
     }
 
     fn regist(&mut self,client: Client) -> Result<String, RegistrarError>{
-        println!("here. line 388.");
-        // (**self).regist(client)
         self.regist(client)
     }
 }
@@ -408,7 +395,7 @@ impl<'s, R: Registrar + ?Sized> Registrar for &'s mut R {
         (**self).bound_redirect(bound)
     }
 
-    fn negotiate(&self, bound: BoundClient, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
+    fn negotiate<'a>(&self, bound: BoundClient<'a>, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
         (**self).negotiate(bound, scope)
     }
 
@@ -417,7 +404,6 @@ impl<'s, R: Registrar + ?Sized> Registrar for &'s mut R {
     }
 
     fn regist(&mut self, client: Client) -> Result<String, RegistrarError>{
-        println!("here. line 409.");
         (**self).regist(client)
     }
 }
@@ -427,7 +413,7 @@ impl<R: Registrar + ?Sized> Registrar for Box<R> {
         (**self).bound_redirect(bound)
     }
 
-    fn negotiate(&self, bound: BoundClient, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
+    fn negotiate<'a>(&self, bound: BoundClient<'a>, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
         (**self).negotiate(bound, scope)
     }
 
@@ -445,7 +431,7 @@ impl<R: Registrar + ?Sized> Registrar for Rc<R> {
         (**self).bound_redirect(bound)
     }
 
-    fn negotiate(&self, bound: BoundClient, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
+    fn negotiate<'a>(&self, bound: BoundClient<'a>, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
         (**self).negotiate(bound, scope)
     }
 
@@ -464,7 +450,7 @@ impl<R: Registrar + ?Sized> Registrar for Arc<R> {
         (**self).bound_redirect(bound)
     }
 
-    fn negotiate(&self, bound: BoundClient, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
+    fn negotiate<'a>(&self, bound: BoundClient<'a>, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
         (**self).negotiate(bound, scope)
     }
 
@@ -483,7 +469,7 @@ impl<'s, R: Registrar + ?Sized + 's> Registrar for MutexGuard<'s, R> {
         (**self).bound_redirect(bound)
     }
 
-    fn negotiate(&self, bound: BoundClient, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
+    fn negotiate<'a>(&self, bound: BoundClient<'a>, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
         (**self).negotiate(bound, scope)
     }
 
@@ -501,7 +487,7 @@ impl<'s, R: Registrar + ?Sized + 's> Registrar for RwLockWriteGuard<'s, R> {
         (**self).bound_redirect(bound)
     }
 
-    fn negotiate(&self, bound: BoundClient, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
+    fn negotiate<'a>(&self, bound: BoundClient<'a>, scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
         (**self).negotiate(bound, scope)
     }
 
@@ -514,127 +500,97 @@ impl<'s, R: Registrar + ?Sized + 's> Registrar for RwLockWriteGuard<'s, R> {
     }
 }
 
-impl Registrar for ClientMap {
-    fn bound_redirect<'a>(&self, bound: ClientUrl<'a>) -> Result<BoundClient<'a>, RegistrarError> {
-        let client = match self.clients.get(bound.client_id.as_ref()) {
-            None => return Err(RegistrarError::Unspecified),
-            Some(stored) => stored,
-        };
 
+impl Registrar for Oauth2ClientService {
+    fn bound_redirect<'a>(&self, bound: ClientUrl<'a>) -> Result<BoundClient<'a>, RegistrarError> {
+        debug!("in db registrar bound redirect..");
+        debug!("bound: {}", &bound.client_id);
+
+        let client = match self.db.find_client_by_id(bound.client_id.as_ref()){
+            Ok(detail) => detail,
+            _ => return Err(RegistrarError::Unspecified)
+        };
+        debug!("find client {:?}", &client);
+        let redirect_uri = Url::parse(client.web_server_redirect_uri.unwrap().as_ref())
+            .map_err(|e|RegistrarError::Unspecified)
+            .unwrap();
+        let additional_redirect_uris = vec![];
+
+
+        debug!("in db redirect_uri is {:?}", redirect_uri);
+        debug!("bound.redirect_uri is {:?}", bound.redirect_uri);
         // Perform exact matching as motivated in the rfc
         match bound.redirect_uri {
             None => (),
-            Some(ref url)
-                if url.as_ref().as_str() == client.redirect_uri.as_str()
-                    || client.additional_redirect_uris.contains(url) =>
-            {
-                ()
-            }
+            Some(ref url) if url.as_ref().as_str() == redirect_uri.as_str() || additional_redirect_uris.contains(url) => (),
             _ => return Err(RegistrarError::Unspecified),
         }
+        debug!("bound_redirect ready to return ok..");
 
         Ok(BoundClient {
             client_id: bound.client_id,
-            redirect_uri: bound
-                .redirect_uri
-                .unwrap_or_else(|| Cow::Owned(client.redirect_uri.clone())),
+            redirect_uri: bound.redirect_uri.unwrap_or_else(
+                || Cow::Owned(redirect_uri.clone())),
         })
     }
 
     /// Always overrides the scope with a default scope.
-    fn negotiate(&self, bound: BoundClient, _scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
-        let client = self
-            .clients
-            .get(bound.client_id.as_ref())
-            .expect("Bound client appears to not have been constructed with this registrar");
+    fn negotiate<'a>(&self, bound: BoundClient<'a>, _scope: Option<Scope>) -> Result<PreGrant, RegistrarError> {
+        debug!("in db registrar negotiate..");
+        debug!("bound: {}, {}", &bound.client_id, &bound.redirect_uri.to_string());
+
+        let client = self.db.find_client_by_id(&bound.client_id)
+            .map_err(|e| RegistrarError::Unspecified)
+            .unwrap();
+            // .expect("Bound client appears to not have been constructed with this registrar");
+        debug!("negotiate find client {}", &client.client_id);
+
         Ok(PreGrant {
             client_id: bound.client_id.into_owned(),
             redirect_uri: bound.redirect_uri.into_owned(),
-            scope: client.default_scope.clone(),
+            scope: Scope::from_str(client.scope.unwrap_or("all".to_string()).as_ref()).unwrap(),
         })
     }
 
     fn check(&self, client_id: &str, passphrase: Option<&[u8]>) -> Result<(), RegistrarError> {
         let password_policy = Self::current_policy(&self.password_policy);
 
-        self.clients
-            .get(client_id)
-            .ok_or(RegistrarError::Unspecified)
-            .and_then(|client| {
-                RegisteredClient::new(client, password_policy).check_authentication(passphrase)
-            })?;
+        let client = self.db.find_client_by_id(client_id)
+            .map_err(|e| RegistrarError::Unspecified);
+            // .unwrap();
+        debug!("check find client {:?}", &client);
+        client.and_then(|op_client| -> Result<(), RegistrarError>{
+                let client = op_client;
+                let encoded = match client.client_secret{
+                    Some(passdata) => ClientType::Confidential { passdata: passdata.into_bytes() },
+                    None => ClientType::Public
+                };
+                let encoded_client = EncodedClient{
+                    client_id: client.client_id,
+                    redirect_uri: Url::parse(client.web_server_redirect_uri.as_ref().unwrap()).unwrap(),
+                    additional_redirect_uris: vec![],
+                    default_scope: Scope::from_str(client.scope.as_ref().unwrap_or(&"".to_string())).unwrap(),
+                    encoded_client: encoded
+                };
+
+                RegisteredClient::new(encoded_client.borrow(), password_policy)
+                    .check_authentication(passphrase)
+        })?;
 
         Ok(())
     }
 
 
     fn regist(&mut self, client: Client) -> Result<String, RegistrarError>{
-        println!(" in impl registar for ClientMap regist .");
-
-        let password_policy = Self::current_policy(&self.password_policy);
-        let encoded_client = client.encode(password_policy);
-
-        let client_id = encoded_client.client_id.clone();
-
-        if self.clients.contains_key(&client_id){
-            return Result::Err(RegistrarError::PrimitiveError);
-        }
-        self.clients.insert(client_id.clone(), encoded_client);
-        // self.register_client(client);
-        Ok(client_id)
+        debug!(" in impl registar for ClientMap regist .");
+        self.register_client(client.clone());
+        Ok(client.client_id)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A test suite for registrars which support simple registrations of arbitrary clients
-    pub fn simple_test_suite<Reg, RegFn>(registrar: &mut Reg, register: RegFn)
-    where
-        Reg: Registrar,
-        RegFn: Fn(&mut Reg, Client),
-    {
-        let public_id = "PrivateClientId";
-        let client_url = "https://example.com";
-
-        let private_id = "PublicClientId";
-        let private_passphrase = b"WOJJCcS8WyS2aGmJK6ZADg==";
-
-        let public_client =
-            Client::public(public_id, client_url.parse().unwrap(), "default".parse().unwrap());
-
-        register(registrar, public_client);
-
-        {
-            registrar
-                .check(public_id, None)
-                .expect("Authorization of public client has changed");
-            registrar
-                .check(public_id, Some(b""))
-                .err()
-                .expect("Authorization with password succeeded");
-        }
-
-        let private_client = Client::confidential(
-            private_id,
-            client_url.parse().unwrap(),
-            "default".parse().unwrap(),
-            private_passphrase,
-        );
-
-        register(registrar, private_client);
-
-        {
-            registrar
-                .check(private_id, Some(private_passphrase))
-                .expect("Authorization with right password did not succeed");
-            registrar
-                .check(private_id, Some(b"Not the private passphrase"))
-                .err()
-                .expect("Authorization succeed with wrong password");
-        }
-    }
 
     #[test]
     fn public_client() {
@@ -644,7 +600,7 @@ mod tests {
             "https://example.com".parse().unwrap(),
             "default".parse().unwrap(),
         )
-        .encode(&policy);
+            .encode(&policy);
         let client = RegisteredClient::new(&client, &policy);
 
         // Providing no authentication data is ok
@@ -663,7 +619,7 @@ mod tests {
             "default".parse().unwrap(),
             pass,
         )
-        .encode(&policy);
+            .encode(&policy);
         let client = RegisteredClient::new(&client, &policy);
         assert!(client.check_authentication(None).is_err());
         assert!(client.check_authentication(Some(pass)).is_ok());
@@ -676,10 +632,10 @@ mod tests {
         let client_id = "ClientId";
         let redirect_uri: Url = "https://example.com/foo".parse().unwrap();
         let additional_redirect_uris: Vec<Url> = vec!["https://example.com/bar".parse().unwrap()];
-        let default_scope = "default".parse().unwrap();
+        let default_scope = "default-scope".parse().unwrap();
         let client = Client::public(client_id, redirect_uri, default_scope)
             .with_additional_redirect_uris(additional_redirect_uris);
-        let mut client_map = ClientMap::new();
+        let mut client_map = Oauth2ClientService::new();
         client_map.register_client(client);
 
         assert_eq!(
@@ -713,8 +669,44 @@ mod tests {
     }
 
     #[test]
-    fn client_map() {
-        let mut client_map = ClientMap::new();
-        simple_test_suite(&mut client_map, ClientMap::register_client);
+    fn client_service(){
+        let mut oauth_service = Oauth2ClientService::new();
+        let public_id = "PrivateClientId";
+        let client_url = "https://example.com";
+
+        let private_id = "PublicClientId";
+        let private_passphrase = b"WOJJCcS8WyS2aGmJK6ZADg==";
+
+        let public_client =
+            Client::public(public_id, client_url.parse().unwrap(), "default".parse().unwrap());
+
+        println!("test register_client");
+
+        oauth_service.register_client(public_client);
+        oauth_service
+            .check(public_id, None)
+            .expect("Authorization of public client has changed");
+        oauth_service
+            .check(public_id, Some(b""))
+            .err()
+            .expect("Authorization with password succeeded");
+
+        let private_client = Client::confidential(
+            private_id,
+            client_url.parse().unwrap(),
+            "default".parse().unwrap(),
+            private_passphrase,
+        );
+
+
+        oauth_service.register_client(private_client);
+
+        oauth_service
+            .check(private_id, Some(private_passphrase))
+            .expect("Authorization with right password did not succeed");
+        oauth_service
+            .check(private_id, Some(b"Not the private passphrase"))
+            .err()
+            .expect("Authorization succeed with wrong password");
     }
 }

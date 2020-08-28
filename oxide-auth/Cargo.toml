@@ -28,8 +28,19 @@ rust-argon2 = "0.8.2"
 rmp-serde = "0.14"
 url = "1.7"
 
-[dev-dependencies]
+r2d2 = "0.8"
+r2d2_redis = {version = "0.13"}
+lazy_static = "1.4"
+
+anyhow = "1.0"
+tokio = { version = "0.2", features = ["full"] }
 reqwest = "^0.9"
+dotenv = "0.15"
+
+log = "0.4.8"
+log4rs = "0.10.0"
+
+[dev-dependencies]
 
 [package.metadata.docs.rs]
 features = []

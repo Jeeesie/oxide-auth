@@ -80,6 +80,8 @@ where
                 endpoint: &mut self.endpoint.0,
             };
 
+            debug!("token: {:?}", wrapped.authorization);
+
             protect(&mut scoped, &wrapped)
         };
 

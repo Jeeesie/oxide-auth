@@ -42,6 +42,7 @@ pub mod grant;
 pub mod issuer;
 pub mod registrar;
 pub mod scope;
+pub mod redis;
 
 type Time = DateTime<Utc>;
 
